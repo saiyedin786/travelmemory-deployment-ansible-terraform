@@ -1,0 +1,127 @@
+- name: Setup Web Server
+  hosts: web
+  become: yes
+
+  vars:
+    app_dir: /home/ubuntu/app
+    frontend_dir: "{{ app_dir }}/frontend"
+    backend_dir: "{{ app_dir }}/backend"
+    backend_url: "http://13.206.107.143:3001"
+
+  tasks:
+
+    # ================= BASIC SETUP =================
+
+    # - name: Update apt cache
+    #   apt:
+    #     update_cache: yes
+
+    - name: Install required packages
+      apt:
+        name:
+          - curl
+          - git
+        state: present
+
+    - name: Add NodeSource repo
+      shell: curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
+      args:
+        executable: /bin/bash
+
+    - name: Install Node.js
+      apt:
+        name: nodejs
+        state: present
+
+    # ================= CLONE CODE =================
+
+    - name: Clone Repository
+      git:
+        repo: "https://github.com/saiyedin786/TravelMemory_prashant.git"
+        dest: "{{ app_dir }}"
+        force: yes
+
+    - name: Set ownership to ubuntu
+      file:
+        path: "{{ app_dir }}"
+        owner: ubuntu
+        group: ubuntu
+        recurse: yes
+
+    # ================= PM2 SETUP =================
+
+    - name: Install PM2 globally
+      npm:
+        name: pm2
+        global: yes
+      become: yes
+
+    - name: Set npm global bin path manually
+      set_fact:
+        npm_global_bin: "/usr/bin"
+
+    # ================= BACKEND =================
+
+    - name: Install Backend Dependencies
+      command: npm install
+      args:
+        chdir: "{{ backend_dir }}"
+      become_user: ubuntu
+
+    # - name: Stop existing backend
+    #   shell: |
+    #     pm2 PATH={{ npm_global_bin.stdout }}:$PATH pm2 delete backend || true
+    #   become_user: ubuntu
+
+    - name: Start Backend
+      command: pm2 start index.js --name backend
+      args:
+        chdir: "{{ backend_dir }}"
+      become_user: ubuntu
+
+    # ================= FRONTEND =================
+
+    - name: Install Frontend Dependencies
+      command: npm install
+      args:
+        chdir: "{{ frontend_dir }}"
+      become_user: ubuntu
+
+    # - name: Create frontend .env file
+    #   copy:
+    #     dest: "{{ frontend_dir }}/.env"
+    #     content: |
+    #       REACT_APP_API_URL={{ backend_url }}
+    #   become_user: ubuntu
+
+    - name: Build Frontend
+      command: npm run build
+      args:
+        chdir: "{{ frontend_dir }}"
+      become_user: ubuntu
+
+    - name: Install serve globally
+      npm:
+        name: serve
+        global: yes
+      become: yes
+
+    # - name: Stop existing frontend
+    #   shell: |
+    #     pm2 PATH={{ npm_global_bin.stdout }}:$PATH pm2 delete frontend || true
+    #   become_user: ubuntu
+
+    - name: Start Frontend
+      command: pm2 start npx --name frontend -- serve -s /home/ubuntu/app/frontend/build -l 3000
+      args:
+        chdir: "{{ frontend_dir }}"
+      become_user: ubuntu
+
+    # ================= PM2 SAVE =================
+
+    - name: Save PM2 process list
+      command: pm2 save
+      become_user: ubuntu
+
+    - name: Setup PM2 startup
+      command: pm2 startup systemd -u ubuntu --hp /home/ubuntu

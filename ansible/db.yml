@@ -1,0 +1,113 @@
+- name: Setup MongoDB Server
+  hosts: db
+  become: yes
+
+  vars:
+    mongo_admin_user: admin
+    mongo_admin_password: password123   # ⚠️ change in real projects
+
+  tasks:
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    #Install dependencies
+    - name: Install required packages
+      apt:
+        name:
+          - gnupg
+          - curl
+        state: present
+
+    # Add MongoDB GPG key and official repo only on supported distro (jammy)
+    - name: Import MongoDB GPG key
+      shell: |
+        curl -fsSL https://pgp.mongodb.com/server-6.0.asc | \
+        gpg -o /usr/share/keyrings/mongodb-server-6.0.gpg --dearmor
+      args:
+        creates: /usr/share/keyrings/mongodb-server-6.0.gpg
+
+    - name: Add MongoDB repository
+      copy:
+        dest: /etc/apt/sources.list.d/mongodb-org-6.0.list
+        content: |
+          deb [ arch=amd64 signed-by=/usr/share/keyrings/mongodb-server-6.0.gpg ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/6.0 multiverse
+
+
+    - name: Update apt cache again
+      apt:
+        update_cache: yes
+
+    # Install MongoDB: use official mongodb-org for jammy, otherwise install distro package
+    - name: Install MongoDB
+      apt:
+        name: mongodb-org
+        state: present
+
+
+       
+
+    - name: Enable and start MongoDB service
+      systemd:
+        name: mongod
+        state: started
+        enabled: yes
+
+    # Create admin user using mongosh if available, otherwise mongo
+    - name: Create MongoDB Admin User
+      shell: |
+        if command -v mongosh >/dev/null 2>&1; then
+          mongosh --eval "db = db.getSiblingDB('admin'); if (!db.getUser('{{ mongo_admin_user }}')) { db.createUser({ user: '{{ mongo_admin_user }}', pwd: '{{ mongo_admin_password }}', roles: [{ role: 'root', db: 'admin' }] }); }"
+        elif command -v mongo >/dev/null 2>&1; then
+          mongo --eval "db = db.getSiblingDB('admin'); if (!db.getUser('{{ mongo_admin_user }}')) { db.createUser({ user: '{{ mongo_admin_user }}', pwd: '{{ mongo_admin_password }}', roles: [{ role: 'root', db: 'admin' }] }); }"
+        else
+          echo "No mongo shell available" >&2
+          exit 1
+        fi
+      args:
+        executable: /bin/bash
+
+    - name: Allow remote access in MongoDB config
+      replace:
+        path: /etc/mongod.conf
+        regexp: '^  bindIp: 127.0.0.1'
+        replace: '  bindIp: 0.0.0.0'
+
+ 
+
+    #Firewall setup
+    - name: Install UFW
+      apt:
+        name: ufw
+        state: present
+
+    - name: Enable UFW
+      ufw:
+        state: enabled
+        policy: allow
+
+    - name: Allow required ports
+      ufw:
+        rule: allow
+        port: "{{ item }}"
+      loop:
+        - 22
+        - 80
+        - 443
+        - 3000
+        - 3001
+        - 27017
+
+    # SSH security
+    - name: Disable root SSH login
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^PermitRootLogin'
+        line: 'PermitRootLogin no'
+        backup: yes
+
+    - name: Restart SSH service
+      service:
+        name: ssh
+        state: restarted
